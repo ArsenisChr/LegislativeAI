@@ -15,7 +15,7 @@ def main():
     tab_uploads, tab_analysis, tab_report = st.tabs([
         "📁 Uploads", 
         "📊 Tables & Analysis", 
-        "📝 Impact Assessment"
+        "📝 Article Differences"
     ])
 
     # --- VIEW 1: UPLOADS ---
@@ -65,7 +65,7 @@ def main():
                     with st.spinner("Comparing and aligning articles (this may take a few seconds)..."):
                         comparison_results = run_comparison_pipeline(articles_initial_law, articles_final_law)
                         st.session_state['comparison_results'] = comparison_results
-                        st.success("Comparison completed! Go to the 'Impact Assessment' tab to see the report.")
+                        st.success("Comparison completed! Go to the 'Article Differences' tab to see the report.")
             else:
                 st.info("Please click 'Extract text' in the 'Uploads' tab to extract the data.")
         else:

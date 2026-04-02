@@ -94,4 +94,4 @@ uv run streamlit run main.py
 1. Go to the **Uploads** tab and upload your Old Law (PDF) and New Law (PDF).
 2. Click **Extract Text** to parse the documents.
 3. Move to the **Tables & Analysis** tab to view the structured data, and click **Compare and align articles**.
-4. View the final, color-coded results in the **Impact Assessment** tab!
+4. View the final, color-coded results in the **Article Differences** tab!
