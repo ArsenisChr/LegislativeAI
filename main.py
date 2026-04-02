@@ -2,6 +2,7 @@ import streamlit as st
 from services.extract_text import load_legal_document
 from services.split_text import extract_and_split_documents
 from services.pipeline import run_comparison_pipeline
+from services.comments_parser import parse_comments_excel
 import pandas as pd
 from dotenv import load_dotenv
 
@@ -11,10 +12,11 @@ def main():
     st.title("Legislative AI")
     st.write("Analyze and understand Greek legislative documents with ease.")
 
-    # Δημιουργία των 3 views με τη μορφή tabs
-    tab_uploads, tab_analysis, tab_report = st.tabs([
+    # Δημιουργία των 4 views με τη μορφή tabs
+    tab_uploads, tab_analysis, tab_comments, tab_report = st.tabs([
         "📁 Uploads", 
         "📊 Tables & Analysis", 
+        "💬 Comments Analysis",
         "📝 Article Differences"
     ])
 
@@ -25,8 +27,22 @@ def main():
         final_law = st.file_uploader("Upload your final legislative document here:", type=["pdf"])
         comments = st.file_uploader("Upload opengov comments here:", type=["xlsx"])
 
+        if initial_law and comments and not final_law:
+            st.success("Initial law and comments uploaded successfully!")
+            
+            if st.button("Parse Comments & Initial Law"):
+                with st.spinner("Parsing data..."):
+                    # Parse the Excel
+                    st.session_state['parsed_comments'] = parse_comments_excel(comments)
+                    
+                    # Extract and split the initial legal document
+                    raw_docs = load_legal_document(initial_law)
+                    st.session_state['articles_initial_law'] = extract_and_split_documents(raw_docs)
+                    
+                    st.success("Data parsed! Go to 'Comments Analysis' tab.")
+
         if initial_law and final_law and comments:
-            st.success("Documents uploaded successfully!")
+            st.success("Both Documents uploaded successfully!")
             if st.button("Extract text"):
                 with st.spinner("Extracting text..."):
                     st.session_state['documents_initial_law'] = load_legal_document(initial_law)
@@ -71,7 +87,39 @@ def main():
         else:
             st.info("Please upload all 3 documents in the 'Uploads' tab to see the analysis.")
 
-    # --- VIEW 3: LEGAL REPORT ---
+    # --- VIEW 3: COMMENTS ANALYSIS ---
+    with tab_comments:
+        st.subheader("Comments for each article")
+        
+        if 'parsed_comments' in st.session_state and 'articles_initial_law' in st.session_state:
+            articles = st.session_state['articles_initial_law']
+            all_comments = st.session_state['parsed_comments']
+            
+            for article in articles:
+                # To article is a dictionary with keys: 'article_number', 'header', 'title', 'body'
+                art_num = article['article_number']
+                
+                # Find which comments relate to this article
+                relevant_comments = [c for c in all_comments if art_num in c['articles']]
+                
+                # Create an expander for each article with the title and number of comments
+                with st.expander(f"{article['header']} ({len(relevant_comments)} comments)"):
+                    # 1. Display the text of the article
+                    st.markdown(f"**{article['title']}**")
+                    st.write(article['body'])
+                    st.markdown("---")
+                    
+                    # 2. Display the comments
+                    if relevant_comments:
+                        st.markdown("#### Comments:")
+                        for comment in relevant_comments:
+                            st.info(f"**ID: {comment['comment_id']}**\n\n{comment['comment']}")
+                    else:
+                        st.write("No comments found for this article.")
+        else:
+            st.info("Please upload the initial law and comments (excel) in the 'Uploads' tab.")
+
+    # --- VIEW 4: LEGAL REPORT ---
     with tab_report:
         st.subheader("Final Legal Report")
         if initial_law and final_law and comments:
