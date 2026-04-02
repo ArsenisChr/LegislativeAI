@@ -6,5 +6,8 @@ dist/
 wheels/
 *.egg-info
 
+# Folders
+local/
+
 # Virtual environments
 .venv
