@@ -30,12 +30,34 @@ Once articles are intelligently matched, the system computes the exact changes:
 - **Change Classification:** Automatically categorizes articles into `UNCHANGED`, `MODIFIED`, `ADDED`, `REMOVED`, `RENUMBERED`, or `RENUMBERED_MODIFIED`.
 - Renders a GitHub-style, color-coded HTML diff directly inside the Streamlit UI.
 
+### 4. Public Consultation (OpenGov) Comments Analysis
+The tool seamlessly integrates public feedback from the opengov.gr platform.
+- Processes `.xlsx` exports of public comments.
+- Employs **Regex** to extract the specific article ranges each comment refers to (e.g., "(άρθρα 2 - 5)").
+- Automatically maps and aggregates citizens' feedback under the corresponding structured `Article` objects, presenting them dynamically in an interactive UI.
+
+---
+
+## ⚠️ Technical Challenges & Ongoing Work
+
+To demonstrate the real-world complexity of this project to engineering teams and recruiters, here are some of the core algorithmic and NLP problems we are actively solving:
+
+### 1. The "Compare & Alignment" Problem (Split & Diff)
+When a new law is drafted, articles are not simply rewritten; they are often **split into multiple new articles**, merged, or drastically reordered. 
+- **Challenge:** A standard 1-to-1 diffing algorithm fails when "Old Article 4" becomes "New Article 5" and "New Article 6".
+- **Solution/WIP:** Enhancing our Hybrid Scoring algorithm to support **1-to-N and N-to-M bipartite matching**, ensuring that even when legislative text is fractured across multiple new sections, the semantic alignment holds and the diff remains accurate.
+
+### 2. Legal NLI & Argument Targeting (Target Article Identification)
+When citizens leave comments on public consultation platforms (OpenGov), they rarely use structured references. A comment might say "This contradicts the previous clause" or reference an article by its context rather than its number.
+- **Challenge:** Accurately mapping a free-text comment to the exact article it refers to (Target Article Identification) when Regex fails.
+- **Solution/WIP:** Implementing **Legal Natural Language Inference (NLI)** and **Argument Targeting** using LLMs to deeply understand the premise of the citizen's comment and semantically bind it to the correct legislative article, even when explicit article numbers are missing.
+
 ---
 
 ## 🛠️ Tech Stack & Libraries
 
 - **Frontend / UI:** [Streamlit](https://streamlit.io/) (Interactive data tables and UI components)
-- **Data Structures:** Python `dataclasses` (Strict typing and low memory overhead) & `pandas`
+- **Data Structures & Processing:** Python `dataclasses` (Strict typing and low memory overhead), `pandas`, and `openpyxl` (Excel parsing)
 - **AI & NLP:** 
   - `langchain` & `langchain-google-genai` (For GenAI Integrations and Embeddings)
   - `scikit-learn` (For TF-IDF Vectorization)
@@ -56,6 +78,7 @@ legal_analyzer/
 └── services/
     ├── extract_text.py      # PDF parsing via Langchain
     ├── split_text.py        # Regex heuristics for Article structuring
+    ├── comments_parser.py   # Regex extraction & Excel mapping for public comments
     ├── normalizer.py        # Text normalization (accents, punctuation removal)
     ├── scorer.py            # TF-IDF & Gemini Embedding matrix computations
     ├── matcher.py           # Hybrid scoring & one-to-one alignment logic
@@ -91,7 +114,13 @@ legal_analyzer/
 uv run streamlit run main.py
 ```
 
+**Scenario A: Law Comparison (Diffing)**
 1. Go to the **Uploads** tab and upload your Old Law (PDF) and New Law (PDF).
 2. Click **Extract Text** to parse the documents.
 3. Move to the **Tables & Analysis** tab to view the structured data, and click **Compare and align articles**.
 4. View the final, color-coded results in the **Article Differences** tab!
+
+**Scenario B: Public Comments Analysis**
+1. Go to the **Uploads** tab and upload your Initial Law (PDF) and the OpenGov Comments (`.xlsx`).
+2. Click **Parse Comments & Initial Law**.
+3. Move to the **Comments Analysis** tab to view an interactive list of all articles, instantly mapped to the citizens' comments that reference them.
