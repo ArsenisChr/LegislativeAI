@@ -9,5 +9,6 @@ wheels/
 # Folders
 local/
 
-# Virtual environments
+# Virtual environments and environment variables
 .venv
+.env
