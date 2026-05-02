@@ -1,4 +1,5 @@
-"""One-stop logging configuration for the legal analyzer app.
+"""
+One-stop logging configuration for the legal analyzer app.
 
 Call `setup_logging()` exactly once at process startup (from `main.py`).
 Every module then obtains its logger via

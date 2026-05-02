@@ -10,6 +10,19 @@ from dotenv import load_dotenv
 
 load_dotenv()
 setup_logging()
+st.set_page_config(page_title="Legislative AI", layout="wide")
+st.markdown(
+    """
+    <style>
+        .block-container {
+            max-width: 100%;
+            padding-left: 5rem;
+            padding-right: 5rem;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # Confidence threshold below which an AI-inferred target is considered
 # uncertain and moved into a separate "needs-review" section of the UI.

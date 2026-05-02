@@ -1,15 +1,17 @@
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
 import os
+
+from services.embeddings_cache import CachedEmbeddings
 
 class Scorer:
     def __init__(self):
         # Requires GOOGLE_API_KEY environment variable to be set.
-        self.embeddings_model = GoogleGenerativeAIEmbeddings(
+        self.embeddings_model = CachedEmbeddings(
             model="models/gemini-embedding-2-preview",
-            api_key=os.getenv("GOOGLE_API_KEY")
+            api_key=os.getenv("GOOGLE_API_KEY"),
+            namespace="target_identification",
         )
         self.vectorizer = TfidfVectorizer()
     
