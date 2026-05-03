@@ -12,3 +12,17 @@ local/
 # Virtual environments and environment variables
 .venv
 .env
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.cursorignore
+.cursorindexingignore
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+local_data/

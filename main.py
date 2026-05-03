@@ -1,4 +1,5 @@
 import streamlit as st
+from models.models import ChangeType
 from services.extract_text import load_legal_document
 from services.split_text import extract_and_split_documents
 from services.pipeline import run_comparison_pipeline
@@ -27,6 +28,20 @@ st.markdown(
 # Confidence threshold below which an AI-inferred target is considered
 # uncertain and moved into a separate "needs-review" section of the UI.
 LOW_CONFIDENCE_THRESHOLD = 0.4
+
+
+def _filter_legal_report_diffs(results, filter_mode: str):
+    """Filter article diffs for the legal report tab."""
+    if filter_mode == "modified":
+        return [
+            d
+            for d in results
+            if d.change_type
+            in (ChangeType.MODIFIED, ChangeType.RENUMBERED_MODIFIED)
+        ]
+    if filter_mode == "unchanged":
+        return [d for d in results if d.change_type == ChangeType.UNCHANGED]
+    return list(results)
 
 
 def _confidence_icon(score: float) -> str:
@@ -328,9 +343,22 @@ def main():
             if 'comparison_results' in st.session_state:
                 st.write("### Comparison Results")
                 results = st.session_state['comparison_results']
-                st.write(f"Total articles processed: {len(results)}")
-                
-                for diff in results:
+                if "legal_report_filter" not in st.session_state:
+                    st.session_state["legal_report_filter"] = "all"
+
+                f1, f2, f3 = st.columns(3)
+                if f1.button("Όλα", key="legal_report_filter_all"):
+                    st.session_state["legal_report_filter"] = "all"
+                if f2.button("Modified", key="legal_report_filter_modified"):
+                    st.session_state["legal_report_filter"] = "modified"
+                if f3.button("Unchanged", key="legal_report_filter_unchanged"):
+                    st.session_state["legal_report_filter"] = "unchanged"
+
+                mode = st.session_state["legal_report_filter"]
+                filtered = _filter_legal_report_diffs(results, mode)
+                st.write(f"Εμφανίζονται {len(filtered)} από {len(results)} άρθρα.")
+
+                for diff in filtered:
                     if diff.change_type.value == "added":
                         title = f"Τελικό - {diff.new_article.header}"
                     elif diff.change_type.value == "removed":

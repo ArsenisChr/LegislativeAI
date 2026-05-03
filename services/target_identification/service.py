@@ -9,6 +9,7 @@ import numpy as np
 from langchain_google_genai import ChatGoogleGenerativeAI
 from sklearn.metrics.pairwise import cosine_similarity
 
+from services.cache_runtime import LLM_CACHE, hash_text
 from models.models import Article, CommentTarget
 from services.embeddings_cache import CachedEmbeddings
 from services.normalizer import normalize_for_comparison
@@ -19,8 +20,6 @@ from services.target_identification.prompts import (
 )
 from services.target_identification.runtime import (
     DEFAULT_CHAT_MODEL_CHAIN,
-    LLM_CACHE,
-    hash_text,
     invoke_with_retry,
     is_model_unavailable_error,
     is_transient_error,

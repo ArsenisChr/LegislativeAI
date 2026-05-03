@@ -1,12 +1,8 @@
 from __future__ import annotations
 
-import hashlib
 import logging
-import os
-from pathlib import Path
 from typing import Any, Dict, Optional
 
-from diskcache import Cache
 from google.genai import errors as genai_errors
 from tenacity import (
     Retrying,
@@ -14,6 +10,7 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
+from services.cache_runtime import LLM_CACHE
 
 log_batch = logging.getLogger("legal_analyzer.batch")
 
@@ -23,21 +20,6 @@ DEFAULT_CHAT_MODEL_CHAIN = [
 ]
 RETRY_MAX_ATTEMPTS = 4
 RETRY_WAIT = wait_exponential(multiplier=1, min=1, max=16)
-
-DEFAULT_CACHE_DIR = Path.home() / ".cache" / "legal_analyzer" / "llm_cache"
-CACHE_DIR = Path(os.getenv("LEGAL_ANALYZER_CACHE_DIR", str(DEFAULT_CACHE_DIR)))
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
-LLM_CACHE: Cache = Cache(str(CACHE_DIR))
-
-
-def hash_text(text: str) -> str:
-    return hashlib.sha1(text.encode("utf-8")).hexdigest()
-
-
-def clear_llm_cache() -> None:
-    """Wipe the on-disk LLM cache."""
-    LLM_CACHE.clear()
-
 
 def is_transient_error(exc: BaseException) -> bool:
     if isinstance(exc, genai_errors.ServerError):
