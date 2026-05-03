@@ -30,11 +30,20 @@ Once articles are intelligently matched, the system computes the exact changes:
 - **Change Classification:** Automatically categorizes articles into `UNCHANGED`, `MODIFIED`, `ADDED`, `REMOVED`, `RENUMBERED`, or `RENUMBERED_MODIFIED`.
 - Renders a GitHub-style, color-coded HTML diff directly inside the Streamlit UI.
 
-### 4. Public Consultation (OpenGov) Comments Analysis
-The tool seamlessly integrates public feedback from the opengov.gr platform.
-- Processes `.xlsx` exports of public comments.
-- Employs **Regex** to extract the specific article ranges each comment refers to (e.g., "(άρθρα 2 - 5)").
-- Automatically maps and aggregates citizens' feedback under the corresponding structured `Article` objects, presenting them dynamically in an interactive UI.
+### 4. Public Consultation (OpenGov) Comments Analysis — Legal NLI Pipeline
+The tool seamlessly integrates public feedback from the opengov.gr platform and goes beyond naive regex mapping. Because comments on opengov are posted **per chapter** (spanning multiple articles), the `"ΑΡΘΡΟ"` column in the `.xlsx` export is only a coarse range (e.g. `άρθρα 3-10`) — not the specific article the citizen is arguing about.
+
+The `services/target_identification/` package (`TargetIdentifier` in `service.py`) implements a three-way dispatch that decides, per comment, how to resolve the actual target article(s):
+
+- **Path A — Regex (explicit reference):** When the cell contains a single explicit `(άρθρο N)`, the target is trusted verbatim with `confidence = 1.0`.
+- **Path B — AI-narrowed (range → 1–3 articles):** When the cell contains a range, the chapter is passed to an LLM together with the comment, and the model picks the 1–3 most relevant articles *within that range* — or flags the comment as `chapter_wide` when it truly addresses the whole chapter. Per-comment `reasoning` and `confidence_score` are returned.
+- **Path C — AI-free (no range at all):** A RAG step embeds all articles with `gemini-embedding-2-preview`, retrieves the top-K candidates via cosine similarity, and the same structured-output LLM picks the final targets.
+
+Key engineering details:
+- **Batched LLM calls:** all comments in the same chapter are resolved in a **single** LLM request (Pydantic `with_structured_output`), dramatically reducing round-trips and cost.
+- **Persistent disk cache (`diskcache`):** LLM answers **and** the corpus embeddings matrix are cached under `~/.cache/legal_analyzer/llm_cache/`, keyed by a stable hash of the article corpus. Re-runs on the same PDF perform zero network calls.
+- **Model fallback chain + retries (`tenacity`):** transient 5xx/429 errors trigger exponential-backoff retries, and permanent `404 model not found` errors transparently fail over to the next model in the chain (`gemini-2.5-flash` → `gemini-2.5-flash-lite`).
+- **Structured logging (`services/infra/logging_setup.py`):** every parse emits a human-readable `PARSE SUMMARY` with counters for cache hits, successful LLM calls, retries, model fallbacks, and a breakdown by target method/scope.
 
 ---
 
@@ -43,24 +52,29 @@ The tool seamlessly integrates public feedback from the opengov.gr platform.
 To demonstrate the real-world complexity of this project to engineering teams and recruiters, here are some of the core algorithmic and NLP problems we are actively solving:
 
 ### 1. The "Compare & Alignment" Problem (Split & Diff)
-When a new law is drafted, articles are not simply rewritten; they are often **split into multiple new articles**, merged, or drastically reordered. 
+When a new law is drafted, articles are not simply rewritten; they are often **split into multiple new articles**, merged, or drastically reordered.
 - **Challenge:** A standard 1-to-1 diffing algorithm fails when "Old Article 4" becomes "New Article 5" and "New Article 6".
 - **Solution/WIP:** Enhancing our Hybrid Scoring algorithm to support **1-to-N and N-to-M bipartite matching**, ensuring that even when legislative text is fractured across multiple new sections, the semantic alignment holds and the diff remains accurate.
 
-### 2. Legal NLI & Argument Targeting (Target Article Identification)
+### 2. Legal NLI & Argument Targeting — *(implemented)*
 When citizens leave comments on public consultation platforms (OpenGov), they rarely use structured references. A comment might say "This contradicts the previous clause" or reference an article by its context rather than its number.
-- **Challenge:** Accurately mapping a free-text comment to the exact article it refers to (Target Article Identification) when Regex fails.
-- **Solution/WIP:** Implementing **Legal Natural Language Inference (NLI)** and **Argument Targeting** using LLMs to deeply understand the premise of the citizen's comment and semantically bind it to the correct legislative article, even when explicit article numbers are missing.
+- **Challenge:** Accurately mapping a free-text comment to the exact article it refers to when Regex is too coarse or absent.
+- **Solution:** The Legal NLI pipeline described above (Section 4) uses LLMs with structured outputs to narrow a chapter-level range down to the 1–3 most relevant articles, or to perform full-corpus retrieval when no range is present. Each prediction carries a `confidence_score` and a human-readable `reasoning`, surfaced in the UI so the legislator can audit uncertain cases.
 
 ---
 
 ## 🛠️ Tech Stack & Libraries
 
-- **Frontend / UI:** [Streamlit](https://streamlit.io/) (Interactive data tables and UI components)
+- **Frontend / UI:** [Streamlit](https://streamlit.io/) (Interactive data tables, master-detail layout for comments analysis)
 - **Data Structures & Processing:** Python `dataclasses` (Strict typing and low memory overhead), `pandas`, and `openpyxl` (Excel parsing)
-- **AI & NLP:** 
-  - `langchain` & `langchain-google-genai` (For GenAI Integrations and Embeddings)
-  - `scikit-learn` (For TF-IDF Vectorization)
+- **AI & NLP:**
+  - `langchain` & `langchain-google-genai` (GenAI integrations, structured outputs, embeddings)
+  - Google Gemini: `gemini-embedding-2-preview` for retrieval; `gemini-2.5-flash` / `gemini-2.5-flash-lite` for NLI (with automatic fallback)
+  - `pydantic` (schema-validated LLM outputs)
+  - `scikit-learn` (TF-IDF vectorization for the diff pipeline)
+- **Reliability & Performance:**
+  - `diskcache` (persistent on-disk cache for LLM responses and corpus embeddings)
+  - `tenacity` (exponential-backoff retries on transient API errors)
 - **Document Processing:** `pdfplumber` (For precise PDF text extraction)
 - **Package Management:** `uv` (Ultra-fast Python package installer)
 
@@ -68,24 +82,57 @@ When citizens leave comments on public consultation platforms (OpenGov), they ra
 
 ## 📁 Project Architecture (Separation of Concerns)
 
-The backend is built with clean architecture principles in mind:
+The backend is grouped by domain under `services/`. Each folder exposes a small public API via its `__init__.py`; `main.py` imports from those package roots (for example `from services.documents import load_legal_document`).
 
 ```text
 legal_analyzer/
-├── main.py                  # Streamlit entry point and UI logic
+├── main.py                             # Streamlit entry point, master-detail UI for comments
 ├── models/
-│   └── models.py            # Dataclasses (Article, DiffSegment, ArticleDiff) and Enums
+│   └── models.py                       # Dataclasses: Article, DiffSegment, ArticleDiff,
+│                                       #             CommentTarget, Comment
 └── services/
-    ├── extract_text.py      # PDF parsing via Langchain
-    ├── split_text.py        # Regex heuristics for Article structuring
-    ├── comments_parser.py   # Regex extraction & Excel mapping for public comments
-    ├── normalizer.py        # Text normalization (accents, punctuation removal)
-    ├── scorer.py            # TF-IDF & Gemini Embedding matrix computations
-    ├── matcher.py           # Hybrid scoring & one-to-one alignment logic
-    ├── differ.py            # Sequence matching & word-level diffing
-    ├── significance.py      # Change classification logic
-    └── pipeline.py          # The orchestrator tying the services together
+    ├── __init__.py                     # Short map of package areas (docstring only)
+    ├── comparison/                     # Old law vs new law: match, diff, classify
+    │   ├── pipeline.py                 # Orchestrator → ArticleDiff list
+    │   ├── matcher.py                  # Hybrid score & greedy one-to-one alignment
+    │   ├── scorer.py                   # TF-IDF + Gemini embeddings matrices
+    │   ├── differ.py                   # Word-level SequenceMatcher segments
+    │   ├── significance.py             # ChangeType classification
+    │   └── normalizer.py               # Accent/punctuation stripping for similarity
+    ├── documents/                       # PDF → structured article dicts
+    │   ├── pdf.py                     # LangChain PDFPlumber loader wrapper
+    │   └── split_text/                 # Regex + heuristics: patterns, preprocess, splitter
+    ├── llm/                            # Shared GenAI infra
+    │   ├── disk_cache.py               # diskcache singleton, hash_text, clear_llm_cache
+    │   └── embeddings.py               # CachedEmbeddings (Gemini + persistence)
+    ├── comments/
+    │   └── parser.py                   # OpenGov Excel → Comment rows; batches by chapter,
+    │                                   # PARSE SUMMARY logging
+    ├── target_identification/          # Legal NLI: RAG, batched narrowing, retries/fallback
+    │   ├── service.py                  # TargetIdentifier (core orchestration)
+    │   ├── article_io.py               # Coerce Article/dicts, format candidate blocks
+    │   ├── narrow_targets.py           # LLM dict → CommentTarget list
+    │   ├── prompts.py                  # LangChain chat templates
+    │   ├── schemas.py                  # Pydantic structured-output models
+    │   └── runtime.py                  # tenacity retries, model-unavailable detection
+    ├── infra/
+    │   └── logging_setup.py           # Idempotent legal_analyzer.* logger wiring
+    └── utils/
+        └── article_number.py          # Stable sort keys for Greek article labels (e.g. 12, 3Α)
 ```
+
+### Caching layout
+
+```text
+~/.cache/legal_analyzer/llm_cache/    # diskcache store
+├── corpus_embeddings::<model>::<sha1(articles)>   # np.ndarray, ~1 per PDF
+└── <sha1(comment + valid_numbers + corpus_sig)>   # per-comment LLM response
+```
+
+The cache location can be overridden via the `LEGAL_ANALYZER_CACHE_DIR`
+environment variable (useful for CI or sandboxed test runs). The cache
+can also be cleared from the UI (**Comments Analysis** tab → 🗑️ Clear
+LLM cache).
 
 ---
 
@@ -94,7 +141,7 @@ legal_analyzer/
 ### Prerequisites
 - Python 3.13+
 - `uv` package manager installed
-- A Google Gemini API Key
+- A Google Gemini API Key (only needed for the *first* run on a given PDF — subsequent runs can be fully served from cache)
 
 ### Installation
 
@@ -107,6 +154,7 @@ legal_analyzer/
    ```env
    GOOGLE_API_KEY="your_api_key_here"
    ```
+   > **Note:** `.env` is listed in `.gitignore`. Never commit API keys.
 
 ### Running the App
 
@@ -122,5 +170,6 @@ uv run streamlit run main.py
 
 **Scenario B: Public Comments Analysis**
 1. Go to the **Uploads** tab and upload your Initial Law (PDF) and the OpenGov Comments (`.xlsx`).
-2. Click **Parse Comments & Initial Law**.
-3. Move to the **Comments Analysis** tab to view an interactive list of all articles, instantly mapped to the citizens' comments that reference them.
+2. Click **Parse Comments & Initial Law**. A progress bar tracks the Legal NLI pipeline in real time.
+3. Move to the **Comments Analysis** tab. The left pane lists every article with its comment count; clicking an entry reveals the matched comments on the right, each with a confidence badge (🟢/🟡/🔴), the AI's reasoning, and an optional "Hide uncertain" filter.
+4. The collapsible **🔍 Parse stats** panel at the top exposes totals, breakdowns by method (`regex` / `ai_nli_narrowed` / `ai_nli`) and scope (`article` / `chapter_wide`), and a cache-clear button.
