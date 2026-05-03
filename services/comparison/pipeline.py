@@ -6,7 +6,7 @@ from models.models import Article, ArticleDiff, ChangeType
 
 from services.utils.article_number import article_sort_tuple
 
-from .differ import compute_diff
+from .differ import compute_diff_tokens
 from .matcher import match_articles
 from .normalizer import normalize_for_comparison
 from .scorer import Scorer
@@ -24,7 +24,12 @@ def _diff_article_sort_key(diff: ArticleDiff) -> tuple[int, str]:
     return article_sort_tuple(art.article_number if art else "")
 
 
-def run_comparison_pipeline(old_dicts: List[dict], new_dicts: List[dict]) -> List[ArticleDiff]:
+def run_comparison_pipeline(
+    old_dicts: List[dict],
+    new_dicts: List[dict],
+    *,
+    normalize_before_diff: bool = False,
+) -> List[ArticleDiff]:
     old_articles = [Article(**d) for d in old_dicts]
     new_articles = [Article(**d) for d in new_dicts]
 
@@ -50,7 +55,11 @@ def run_comparison_pipeline(old_dicts: List[dict], new_dicts: List[dict]) -> Lis
     results: List[ArticleDiff] = []
 
     for old_art, new_art, score in matched_pairs:
-        segments = compute_diff(_combined_article_text(old_art), _combined_article_text(new_art))
+        segments, token_change_fraction = compute_diff_tokens(
+            _combined_article_text(old_art),
+            _combined_article_text(new_art),
+            normalize_text=normalize_before_diff,
+        )
         change_type = classify_change(old_art, new_art, segments)
         results.append(
             ArticleDiff(
@@ -58,6 +67,7 @@ def run_comparison_pipeline(old_dicts: List[dict], new_dicts: List[dict]) -> Lis
                 new_article=new_art,
                 change_type=change_type,
                 similarity_score=score,
+                token_change_fraction=token_change_fraction,
                 segments=segments,
             )
         )

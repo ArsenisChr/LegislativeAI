@@ -43,6 +43,22 @@ def _filter_legal_report_diffs(results, filter_mode: str):
     return list(results)
 
 
+def _apply_min_token_change(diffs: list, min_fraction: float) -> list:
+    """Keep all non–text-edit rows; for MODIFIED / RENUMBERED_MODIFIED require token_change_fraction."""
+    gated = (
+        ChangeType.MODIFIED,
+        ChangeType.RENUMBERED_MODIFIED,
+    )
+    out = []
+    for d in diffs:
+        if d.change_type in gated:
+            if d.token_change_fraction >= min_fraction:
+                out.append(d)
+        else:
+            out.append(d)
+    return out
+
+
 def _confidence_icon(score: float) -> str:
     """Traffic-light icon for a confidence score."""
     if score >= 0.7:
@@ -312,11 +328,31 @@ def main():
                 st.write("Number of articles: " + str(len(articles_final_law)))
                 st.dataframe(articles_final_law, width='stretch')
                 
-                if st.button("Compare and align articles"):
+                c1, c2 = st.columns(2)
+                compare_default = c1.button("Compare and align articles")
+                compare_normalized = c2.button(
+                    "Compare with text cleanup (normalize)"
+                )
+
+                if compare_default or compare_normalized:
+                    normalize_before_diff = compare_normalized
                     with st.spinner("Comparing and aligning articles (this may take a few seconds)..."):
-                        comparison_results = run_comparison_pipeline(articles_initial_law, articles_final_law)
+                        comparison_results = run_comparison_pipeline(
+                            articles_initial_law,
+                            articles_final_law,
+                            normalize_before_diff=normalize_before_diff,
+                        )
                         st.session_state['comparison_results'] = comparison_results
-                        st.success("Comparison completed! Go to the 'Article Differences' tab to see the report.")
+                        st.session_state['comparison_normalize_before_diff'] = normalize_before_diff
+                        mode_label = (
+                            "with text cleanup (punctuation removal + lowercase + whitespace cleanup)"
+                            if normalize_before_diff
+                            else "without extra text cleanup"
+                        )
+                        st.success(
+                            "Comparison completed "
+                            f"{mode_label}. Go to the 'Article Differences' tab to see the report."
+                        )
             else:
                 st.info("Please click 'Extract text' in the 'Uploads' tab to extract the data.")
         else:
@@ -355,6 +391,34 @@ def main():
 
                 mode = st.session_state["legal_report_filter"]
                 filtered = _filter_legal_report_diffs(results, mode)
+                used_cleanup = st.session_state.get(
+                    "comparison_normalize_before_diff",
+                    False,
+                )
+                if used_cleanup:
+                    st.caption(
+                        "Mode: text cleanup enabled before diff "
+                        "(remove .,;:, lowercase, collapse spaces)."
+                    )
+                else:
+                    st.caption("Mode: raw text before diff (no cleanup).")
+
+                min_frac = st.slider(
+                    "Ελάχιστο μέγεθος μεταβολής επί των tokens του diff (1 − ratio)",
+                    min_value=0.0,
+                    max_value=1.0,
+                    value=0.0,
+                    step=0.005,
+                    format="%.3f",
+                    help=(
+                        "Μόνο για MODIFIED και RENUMBERED_MODIFIED: κρύβει ζεύγη με υπερβολικά "
+                        "μικρό token diff (π.χ. μια στίξη). Κλίμακα 0–1 όπως το "
+                        "`1 − SequenceMatcher.ratio()` των ίδιων tokens με το έγχρωμο diff."
+                    ),
+                    key="legal_report_min_token_change",
+                )
+                filtered = _apply_min_token_change(filtered, min_frac)
+
                 st.write(f"Εμφανίζονται {len(filtered)} από {len(results)} άρθρα.")
 
                 for diff in filtered:
@@ -368,7 +432,11 @@ def main():
                         title = f"Ιδιο {diff.old_article.header}"
                         
                     with st.expander(f"{title}  |  Status: {diff.change_type.value.upper()}"):
-                        st.write(f"**Similarity Score:** {diff.similarity_score:.2f}")
+                        st.write(f"**Similarity Score (ευθυγράμμιση άρθρων):** {diff.similarity_score:.2f}")
+                        if diff.old_article and diff.new_article:
+                            st.write(
+                                f"**Μεταβολή tokens (diff):** {diff.token_change_fraction:.1%}"
+                            )
                         
                         if diff.change_type.value in ["added", "removed", "unchanged"]:
                             art = diff.new_article if diff.new_article else diff.old_article

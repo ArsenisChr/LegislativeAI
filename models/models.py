@@ -27,7 +27,8 @@ class ArticleDiff:
     old_article: Optional[Article]
     new_article: Optional[Article]
     change_type: ChangeType
-    similarity_score: float = 0.0
+    similarity_score: float = 0.0  # Hybrid align score (embed + TF-IDF)
+    token_change_fraction: float = 0.0  # 1 - difflib ratio on whitespace tokens (paired only)
     segments: List[DiffSegment] = field(default_factory=list)
 
 @dataclass
