@@ -6,7 +6,7 @@ from typing import Callable, Dict, List, Optional
 
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
-from services.cache_runtime import LLM_CACHE, hash_text
+from services.llm.disk_cache import LLM_CACHE, hash_text
 
 
 class CachedEmbeddings:

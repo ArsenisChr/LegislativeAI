@@ -33,7 +33,7 @@ Once articles are intelligently matched, the system computes the exact changes:
 ### 4. Public Consultation (OpenGov) Comments Analysis — Legal NLI Pipeline
 The tool seamlessly integrates public feedback from the opengov.gr platform and goes beyond naive regex mapping. Because comments on opengov are posted **per chapter** (spanning multiple articles), the `"ΑΡΘΡΟ"` column in the `.xlsx` export is only a coarse range (e.g. `άρθρα 3-10`) — not the specific article the citizen is arguing about.
 
-The `target_identification.py` service implements a three-way dispatch that decides, per comment, how to resolve the actual target article(s):
+The `services/target_identification/` package (`TargetIdentifier` in `service.py`) implements a three-way dispatch that decides, per comment, how to resolve the actual target article(s):
 
 - **Path A — Regex (explicit reference):** When the cell contains a single explicit `(άρθρο N)`, the target is trusted verbatim with `confidence = 1.0`.
 - **Path B — AI-narrowed (range → 1–3 articles):** When the cell contains a range, the chapter is passed to an LLM together with the comment, and the model picks the 1–3 most relevant articles *within that range* — or flags the comment as `chapter_wide` when it truly addresses the whole chapter. Per-comment `reasoning` and `confidence_score` are returned.
@@ -43,7 +43,7 @@ Key engineering details:
 - **Batched LLM calls:** all comments in the same chapter are resolved in a **single** LLM request (Pydantic `with_structured_output`), dramatically reducing round-trips and cost.
 - **Persistent disk cache (`diskcache`):** LLM answers **and** the corpus embeddings matrix are cached under `~/.cache/legal_analyzer/llm_cache/`, keyed by a stable hash of the article corpus. Re-runs on the same PDF perform zero network calls.
 - **Model fallback chain + retries (`tenacity`):** transient 5xx/429 errors trigger exponential-backoff retries, and permanent `404 model not found` errors transparently fail over to the next model in the chain (`gemini-2.5-flash` → `gemini-2.5-flash-lite`).
-- **Structured logging (`services/logging_setup.py`):** every parse emits a human-readable `PARSE SUMMARY` with counters for cache hits, successful LLM calls, retries, model fallbacks, and a breakdown by target method/scope.
+- **Structured logging (`services/infra/logging_setup.py`):** every parse emits a human-readable `PARSE SUMMARY` with counters for cache hits, successful LLM calls, retries, model fallbacks, and a breakdown by target method/scope.
 
 ---
 
@@ -82,28 +82,43 @@ When citizens leave comments on public consultation platforms (OpenGov), they ra
 
 ## 📁 Project Architecture (Separation of Concerns)
 
-The backend is built with clean architecture principles in mind:
+The backend is grouped by domain under `services/`. Each folder exposes a small public API via its `__init__.py`; `main.py` imports from those package roots (for example `from services.documents import load_legal_document`).
 
 ```text
 legal_analyzer/
-├── main.py                       # Streamlit entry point, master-detail UI for comments
+├── main.py                             # Streamlit entry point, master-detail UI for comments
 ├── models/
-│   └── models.py                 # Dataclasses: Article, DiffSegment, ArticleDiff,
-│                                 #             CommentTarget, Comment
+│   └── models.py                       # Dataclasses: Article, DiffSegment, ArticleDiff,
+│                                       #             CommentTarget, Comment
 └── services/
-    ├── extract_text.py           # PDF parsing via Langchain
-    ├── split_text.py             # Regex heuristics for Article structuring
-    ├── comments_parser.py        # Excel parsing, 3-way dispatch (regex / narrowed / free),
-    │                             # batching per chapter, PARSE SUMMARY reporting
-    ├── target_identification.py  # Legal NLI pipeline: RAG retrieval, batched LLM calls,
-    │                             # disk cache, retry + model fallback chain
-    ├── logging_setup.py          # Centralized, idempotent logger configuration
-    ├── normalizer.py             # Text normalization (accents, punctuation removal)
-    ├── scorer.py                 # TF-IDF & Gemini Embedding matrix computations
-    ├── matcher.py                # Hybrid scoring & one-to-one alignment logic
-    ├── differ.py                 # Sequence matching & word-level diffing
-    ├── significance.py           # Change classification logic
-    └── pipeline.py               # The orchestrator tying the services together
+    ├── __init__.py                     # Short map of package areas (docstring only)
+    ├── comparison/                     # Old law vs new law: match, diff, classify
+    │   ├── pipeline.py                 # Orchestrator → ArticleDiff list
+    │   ├── matcher.py                  # Hybrid score & greedy one-to-one alignment
+    │   ├── scorer.py                   # TF-IDF + Gemini embeddings matrices
+    │   ├── differ.py                   # Word-level SequenceMatcher segments
+    │   ├── significance.py             # ChangeType classification
+    │   └── normalizer.py               # Accent/punctuation stripping for similarity
+    ├── documents/                       # PDF → structured article dicts
+    │   ├── pdf.py                     # LangChain PDFPlumber loader wrapper
+    │   └── split_text/                 # Regex + heuristics: patterns, preprocess, splitter
+    ├── llm/                            # Shared GenAI infra
+    │   ├── disk_cache.py               # diskcache singleton, hash_text, clear_llm_cache
+    │   └── embeddings.py               # CachedEmbeddings (Gemini + persistence)
+    ├── comments/
+    │   └── parser.py                   # OpenGov Excel → Comment rows; batches by chapter,
+    │                                   # PARSE SUMMARY logging
+    ├── target_identification/          # Legal NLI: RAG, batched narrowing, retries/fallback
+    │   ├── service.py                  # TargetIdentifier (core orchestration)
+    │   ├── article_io.py               # Coerce Article/dicts, format candidate blocks
+    │   ├── narrow_targets.py           # LLM dict → CommentTarget list
+    │   ├── prompts.py                  # LangChain chat templates
+    │   ├── schemas.py                  # Pydantic structured-output models
+    │   └── runtime.py                  # tenacity retries, model-unavailable detection
+    ├── infra/
+    │   └── logging_setup.py           # Idempotent legal_analyzer.* logger wiring
+    └── utils/
+        └── article_number.py          # Stable sort keys for Greek article labels (e.g. 12, 3Α)
 ```
 
 ### Caching layout

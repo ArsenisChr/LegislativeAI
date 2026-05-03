@@ -1,11 +1,10 @@
 import streamlit as st
 from models.models import ChangeType
-from services.extract_text import load_legal_document
-from services.split_text import extract_and_split_documents
-from services.pipeline import run_comparison_pipeline
-from services.comments_parser import parse_comments_excel
+from services.comments import parse_comments_excel
+from services.comparison import run_comparison_pipeline
+from services.documents import extract_and_split_documents, load_legal_document
+from services.infra import setup_logging
 from services.target_identification import clear_llm_cache
-from services.logging_setup import setup_logging
 import pandas as pd
 from dotenv import load_dotenv
 

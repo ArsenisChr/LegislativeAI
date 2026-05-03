@@ -9,10 +9,12 @@ import numpy as np
 from langchain_google_genai import ChatGoogleGenerativeAI
 from sklearn.metrics.pairwise import cosine_similarity
 
-from services.cache_runtime import LLM_CACHE, hash_text
 from models.models import Article, CommentTarget
-from services.embeddings_cache import CachedEmbeddings
-from services.normalizer import normalize_for_comparison
+from services.comparison.normalizer import normalize_for_comparison
+from services.llm.disk_cache import LLM_CACHE, hash_text
+from services.llm.embeddings import CachedEmbeddings
+from services.target_identification.article_io import coerce_articles, format_candidates_block
+from services.target_identification.narrow_targets import narrow_dict_to_targets
 from services.target_identification.prompts import (
     build_free_messages,
     build_narrow_batch_messages,
@@ -35,41 +37,6 @@ log_batch = logging.getLogger("legal_analyzer.batch")
 log_cache = logging.getLogger("legal_analyzer.cache")
 
 
-def _ensure_articles(articles: List) -> List[Article]:
-    normalized: List[Article] = []
-    for item in articles:
-        if isinstance(item, Article):
-            normalized.append(item)
-        elif isinstance(item, dict):
-            normalized.append(
-                Article(
-                    article_number=str(item.get("article_number", "")),
-                    header=str(item.get("header", "")),
-                    title=str(item.get("title", "")),
-                    body=str(item.get("body", "")),
-                )
-            )
-        else:
-            raise TypeError(
-                f"Unsupported article type: {type(item)!r}; expected Article or dict."
-            )
-    return normalized
-
-
-def _format_candidates_block(candidates: List[Article]) -> str:
-    lines: List[str] = []
-    for article in candidates:
-        body_preview = (article.body or "").strip().replace("\n", " ")
-        if len(body_preview) > 1200:
-            body_preview = body_preview[:1200] + " [...]"
-        lines.append(
-            f"--- Άρθρο {article.article_number} ---\n"
-            f"Τίτλος: {article.title}\n"
-            f"Σώμα: {body_preview}"
-        )
-    return "\n\n".join(lines)
-
-
 class TargetIdentifier:
     def __init__(
         self,
@@ -77,7 +44,7 @@ class TargetIdentifier:
         chat_models: Optional[List[str]] = None,
         embeddings_model: str = "models/gemini-embedding-2-preview",
     ) -> None:
-        self.articles: List[Article] = _ensure_articles(articles)
+        self.articles: List[Article] = coerce_articles(articles)
         self._articles_by_number: Dict[str, Article] = {
             a.article_number: a for a in self.articles
         }
@@ -262,7 +229,7 @@ class TargetIdentifier:
 
         cached = LLM_CACHE.get(cache_key)
         if cached is None:
-            candidates_block = _format_candidates_block(chapter_articles)
+            candidates_block = format_candidates_block(chapter_articles)
             messages = build_narrow_single_messages(comment_text, candidates_block)
             result: NarrowedNLIResult = self._invoke_with_fallback(
                 self._get_narrow_chain(),
@@ -272,7 +239,7 @@ class TargetIdentifier:
             cached = result.model_dump()
             LLM_CACHE[cache_key] = cached
 
-        return self._narrow_result_to_targets(cached, valid_numbers)
+        return narrow_dict_to_targets(cached, valid_numbers)
 
     def narrow_batch(
         self,
@@ -299,7 +266,7 @@ class TargetIdentifier:
             cached = LLM_CACHE.get(self._cache_key(text, valid_numbers))
             if cached is not None:
                 self.stats["cache_hits"] += 1
-                results[cid] = self._narrow_result_to_targets(cached, valid_numbers)
+                results[cid] = narrow_dict_to_targets(cached, valid_numbers)
             else:
                 pending.append((cid, text))
 
@@ -315,7 +282,7 @@ class TargetIdentifier:
             log_batch.info("%s: fully cached → no LLM call", chapter_tag)
             return results
 
-        candidates_block = _format_candidates_block(chapter_articles)
+        candidates_block = format_candidates_block(chapter_articles)
         comment_lines = [
             f"[{idx}] {text.strip()}" for idx, (_, text) in enumerate(pending, start=1)
         ]
@@ -404,7 +371,7 @@ class TargetIdentifier:
                 "confidence_score": float(per.confidence_score),
             }
             LLM_CACHE[self._cache_key(text, valid_numbers)] = payload
-            mapped = self._narrow_result_to_targets(payload, valid_numbers)
+            mapped = narrow_dict_to_targets(payload, valid_numbers)
             results[cid] = mapped
             if not mapped:
                 empty += 1
@@ -445,7 +412,7 @@ class TargetIdentifier:
 
         cached = LLM_CACHE.get(cache_key)
         if cached is None:
-            candidates_block = _format_candidates_block([a for a, _ in candidates])
+            candidates_block = format_candidates_block([a for a, _ in candidates])
             messages = build_free_messages(comment_text, candidates_block)
             result: FreeNLIResult = self._invoke_with_fallback(
                 self._get_free_chain(),
@@ -477,55 +444,3 @@ class TargetIdentifier:
             self.articles_signature,
         )
 
-    @staticmethod
-    def _narrow_result_to_targets(
-        result: Dict[str, Any],
-        valid_numbers: List[str],
-    ) -> List[CommentTarget]:
-        scope = result.get("scope", "article")
-        reasoning = (result.get("reasoning") or "").strip()
-        confidence = float(result.get("confidence_score") or 0.0)
-
-        if scope == "chapter_wide":
-            return [
-                CommentTarget(
-                    article_number="",
-                    method="ai_nli_narrowed",
-                    scope="chapter_wide",
-                    chapter_range=list(valid_numbers),
-                    reasoning=reasoning,
-                    confidence_score=confidence,
-                )
-            ]
-
-        raw_numbers = result.get("article_numbers") or []
-        valid_set = set(valid_numbers)
-        chosen = [n for n in raw_numbers if n in valid_set][:3]
-
-        if not chosen:
-            if raw_numbers:
-                log_batch.warning(
-                    "dropped LLM numbers %s (none in valid set %s, scope=%s)",
-                    raw_numbers,
-                    valid_numbers,
-                    scope,
-                )
-            else:
-                log_batch.debug(
-                    "LLM returned no article_numbers (scope=%s, valid=%s)",
-                    scope,
-                    valid_numbers,
-                )
-            return []
-
-        return [
-            CommentTarget(
-                article_number=num,
-                method="ai_nli_narrowed",
-                scope="article",
-                chapter_range=list(valid_numbers),
-                reasoning=reasoning,
-                confidence_score=confidence,
-            )
-            for num in chosen
-        ]

@@ -7,7 +7,7 @@ Every module then obtains its logger via
 messages with consistent formatting.
 
 Areas currently used:
-  - legal_analyzer.parser : comments_parser.py (phases & summary)
+  - legal_analyzer.parser : services.comments.parser (phases & summary)
   - legal_analyzer.ident  : TargetIdentifier init / corpus embedding
   - legal_analyzer.batch  : narrow_batch / narrow_within_range / free
   - legal_analyzer.cache  : disk cache reads/writes (debug-level)
@@ -29,11 +29,7 @@ _DATEFMT = "%H:%M:%S"
 
 
 class _ShortNameFilter(logging.Filter):
-    """Inject `name_short` into the log record.
-
-    Converts `legal_analyzer.parser` into `parser` so the log prefix stays
-    compact regardless of how deep the logger hierarchy grows.
-    """
+    """Inject `name_short` into the log record."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         record.name_short = record.name.rsplit(".", 1)[-1]
@@ -41,20 +37,13 @@ class _ShortNameFilter(logging.Filter):
 
 
 def setup_logging(level: int = logging.INFO, stream: Optional[object] = None) -> None:
-    """Configure the `legal_analyzer` logger hierarchy.
-
-    Idempotent: safe to call multiple times (only configures once). In
-    Streamlit the whole script re-runs on every interaction, so guarding
-    against double-configuration matters to avoid duplicate handlers.
-    """
+    """Configure the `legal_analyzer` logger hierarchy (idempotent)."""
     global _CONFIGURED
     if _CONFIGURED:
         return
 
     logger = logging.getLogger("legal_analyzer")
     logger.setLevel(level)
-    # Don't propagate up to the root logger, because Streamlit attaches its
-    # own handlers there and we'd end up with doubled lines.
     logger.propagate = False
 
     handler = logging.StreamHandler(stream=stream or sys.stdout)

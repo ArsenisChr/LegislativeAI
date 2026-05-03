@@ -10,8 +10,6 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
-from services.cache_runtime import LLM_CACHE
-
 log_batch = logging.getLogger("legal_analyzer.batch")
 
 DEFAULT_CHAT_MODEL_CHAIN = [
